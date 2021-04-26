@@ -37,6 +37,19 @@ import { arePathsSame } from '../../common';
         let fs: IFileSystem;
         let extensionChecker: IPythonExtensionChecker;
         const defaultPython3Name = 'python3';
+        const pyEnvInterpreter: PythonEnvironment = {
+            displayName: 'Python 3 Environment for PyEnv',
+            path: '/users/username/envs/temp/python',
+            sysPrefix: 'python',
+            version: {
+                major: 3,
+                minor: 8,
+                raw: '3.8',
+                build: ['0'],
+                patch: 0,
+                prerelease: ['0']
+            }
+        };
         const python3Interpreter: PythonEnvironment = {
             displayName: 'Python 3 Environment',
             path: '/usr/bin/python3',
@@ -69,6 +82,16 @@ import { arePathsSame } from '../../common';
             path: '/usr/bin/conda/python3',
             sysPrefix: 'conda',
             envType: EnvironmentType.Conda
+        };
+        const pyEnvPython3spec: Kernel.ISpecModel = {
+            display_name: 'Python 3 on Disk for pyenv',
+            name: 'python38664bitpyenv87d47e496650464eac2bd1421064a987',
+            argv: ['/users/username/envs/temp/python'],
+            language: 'python',
+            resources: {},
+            metadata: {
+                interpreter: pyEnvInterpreter
+            }
         };
         const python3spec: Kernel.ISpecModel = {
             display_name: 'Python 3 on Disk',
@@ -148,9 +171,18 @@ import { arePathsSame } from '../../common';
                 if (c.startsWith('conda')) {
                     return Promise.resolve(['interpreter.json']);
                 }
-                return Promise.resolve(['python3.json', 'python3dupe.json', 'julia.json', 'python2.json']);
+                return Promise.resolve([
+                    'python.json',
+                    'python3.json',
+                    'python3dupe.json',
+                    'julia.json',
+                    'python2.json'
+                ]);
             });
             when(fs.readLocalFile(anything())).thenCall((f) => {
+                if (f.endsWith('python.json')) {
+                    return Promise.resolve(JSON.stringify(pyEnvPython3spec));
+                }
                 if (f.endsWith('python3.json')) {
                     return Promise.resolve(JSON.stringify(python3spec));
                 }
@@ -229,6 +261,7 @@ import { arePathsSame } from '../../common';
                 python3Interpreter,
                 condaEnvironment,
                 python2Interpreter,
+                pyEnvInterpreter,
                 condaEnvironmentBase
             ]);
             when(extensionChecker.isPythonExtensionInstalled).thenReturn(true);
@@ -407,6 +440,30 @@ import { arePathsSame } from '../../common';
                 orig_nbformat: 4
             });
             assert.equal(kernel?.kernelSpec?.language, 'python', 'No kernel found matching default notebook metadata');
+        });
+        test.only('Can match (exactly) based on notebook metadata', async () => {
+            when(interpreterService.getActiveInterpreter(anything())).thenResolve(activeInterpreter);
+            when(interpreterService.getInterpreters(anything())).thenResolve([
+                python3Interpreter,
+                condaEnvironment,
+                python2Interpreter,
+                pyEnvInterpreter,
+                condaEnvironmentBase
+            ]);
+            when(extensionChecker.isPythonExtensionInstalled).thenReturn(true);
+
+            // Generic python 3
+            const kernel = await kernelFinder.findKernel(undefined, {
+                kernelspec: {
+                    display_name: pyEnvPython3spec.display_name,
+                    name: pyEnvPython3spec.name
+                },
+                language_info: { name: PYTHON_LANGUAGE },
+                orig_nbformat: 4
+            });
+            assert.equal(kernel?.kernelSpec?.language, 'python', 'No kernel found matching default notebook metadata');
+            assert.equal(kernel?.kind, 'startUsingPythonInterpreter', 'Should start using Python');
+            assert.deepEqual(kernel?.interpreter, pyEnvInterpreter, 'Should start using PyEnv');
         });
     });
 });
