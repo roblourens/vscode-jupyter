@@ -32,10 +32,11 @@
     "python.experiments.enabled": true,
     "jupyter.generateSVGPlots": false,
     // See https://github.com/microsoft/vscode-jupyter/issues/10258
-    "jupyter.forceIPyKernelDebugger": false,
-    "python.defaultInterpreterPath": "python",
+    "jupyter.forceIPyKernelDebugger": true,
+    "python.defaultInterpreterPath": "/Users/roblou/code/vscode-jupyter/.venv/bin/python",
     "task.problemMatchers.neverPrompt": {
         "shell": true,
         "npm": true
-    }
+    },
+    "python.envFile": "${workspaceFolder}/.env"
 }

@@ -334,20 +334,19 @@ export class CodeGenerator implements IInteractiveWindowCodeGenerator {
     ): { runtimeLine: number; debuggerStartLine: number } {
         const useNewDebugger =
             usingJupyterDebugProtocol || this.configService.getSettings(undefined).forceIPyKernelDebugger === true;
-        if (debug && this.configService.getSettings(this.notebook.uri).stopOnFirstLineWhileDebugging) {
-            if (useNewDebugger) {
-                // Inject the breakpoint line
-                source.splice(0, 0, 'breakpoint()\n');
-                return { runtimeLine: 1, debuggerStartLine: trueStartLine + 1 };
-            } else {
-                // Inject the breakpoint line
-                source.splice(0, 0, 'breakpoint()\n');
+        if (
+            debug &&
+            this.configService.getSettings(this.notebook.uri).stopOnFirstLineWhileDebugging &&
+            !useNewDebugger
+        ) {
+            // Inject the breakpoint line
+            source.splice(0, 0, 'breakpoint()\n');
 
-                // Start on the second line
-                // Since a breakpoint was added map to the first line (even if blank)
-                return { runtimeLine: 2, debuggerStartLine: trueStartLine };
-            }
+            // Start on the second line
+            // Since a breakpoint was added map to the first line (even if blank)
+            return { runtimeLine: 2, debuggerStartLine: trueStartLine };
         }
+
         // No breakpoint necessary, start on the first line
         // Since no breakpoint was added map to the first non-blank line
         const debuggerStartLine = hasCellMarker ? firstNonBlankLineIndex : firstNonBlankLineIndex + 1;

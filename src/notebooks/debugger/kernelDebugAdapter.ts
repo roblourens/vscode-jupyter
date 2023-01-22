@@ -4,7 +4,7 @@
 'use strict';
 
 import * as path from '../../platform/vscode-path/path';
-import { IDumpCellResponse } from './debuggingTypes';
+import { IDumpCellResponse, ISourceMapRequest } from './debuggingTypes';
 import { traceError } from '../../platform/logging';
 import { KernelDebugAdapterBase } from './kernelDebugAdapterBase';
 import { DebugProtocol } from 'vscode-debugprotocol';
@@ -29,7 +29,7 @@ export class KernelDebugAdapter extends KernelDebugAdapterBase {
             traceError(err);
         }
     }
-    protected translateRealFileToDebuggerFile(
+    protected translateRealLocationToDebuggerLocation(
         source: DebugProtocol.Source | undefined,
         _lines?: { line?: number; endLine?: number; lines?: number[] }
     ) {
@@ -39,6 +39,32 @@ export class KernelDebugAdapter extends KernelDebugAdapterBase {
                 source.path = mapping;
             }
         }
+    }
+
+    protected override async sendRequestToJupyterSession2(
+        request: DebugProtocol.Request
+    ): Promise<DebugProtocol.Response> {
+        if (request.command === 'setBreakpoints') {
+            const args = request.arguments as DebugProtocol.SetBreakpointsArguments;
+            const sourceMapRequest: ISourceMapRequest = { source: { path: args.source.path! }, pydevdSourceMaps: [] };
+            // const runtimeSource = this.cellToDebugFileSortedInReverseOrderByLineNumber[0].debugFilePath;
+            const runtimeSource = this.cellToFile.get(args.source.path!);
+            sourceMapRequest.pydevdSourceMaps = [
+                // { endLine: 3, line: 1, runtimeLine: 2, runtimeSource: { path: '<ipython-input-1-09853089e9ea>' } }
+                {
+                    endLine: 3,
+                    line: 1,
+                    runtimeLine: 2,
+                    runtimeSource: {
+                        // path: '/var/folders/tx/p0ycbfpj37786p760wwdg6y80000gn/T/ipykernel_4963/3029800661.py'
+                        path: '/private' + runtimeSource
+                    }
+                }
+            ];
+            await this.session.customRequest('setPydevdSourceMap', sourceMapRequest);
+        }
+
+        return super.sendRequestToJupyterSession2(request);
     }
 
     protected getDumpFilesForDeletion() {

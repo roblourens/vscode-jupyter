@@ -7,11 +7,15 @@ import { DebugAdapterTracker, DebugSession, NotebookDocument, Uri } from 'vscode
 import { DebugProtocol } from 'vscode-debugprotocol';
 import { getInteractiveCellMetadata } from '../../../interactive-window/helpers';
 import { IKernel, IKernelConnectionSession } from '../../../kernels/types';
-import { IDebugLocationTrackerFactory, IDumpCellResponse } from '../../../notebooks/debugger/debuggingTypes';
+import {
+    IDebugLocationTrackerFactory,
+    IDumpCellResponse,
+    ISourceMapRequest
+} from '../../../notebooks/debugger/debuggingTypes';
 import { KernelDebugAdapterBase } from '../../../notebooks/debugger/kernelDebugAdapterBase';
 import { IDebugService } from '../../../platform/common/application/types';
 import { IPlatformService } from '../../../platform/common/platform/types';
-import { traceError, traceInfo, traceInfoIfCI } from '../../../platform/logging';
+import { traceError, traceInfoIfCI } from '../../../platform/logging';
 import * as path from '../../../platform/vscode-path/path';
 import { InteractiveCellMetadata } from '../../editor-integration/types';
 /**
@@ -142,80 +146,115 @@ export class KernelDebugAdapter extends KernelDebugAdapterBase {
             lines.lines = lines?.lines.map((line) => line + (cell.lineOffset || 0));
         }
     }
-    protected override translateRealFileToDebuggerFile(
+    protected override translateRealLocationToDebuggerLocation(
         source: DebugProtocol.Source | undefined,
-        lines?: { line?: number; endLine?: number; lines?: number[] }
+        location?: { line?: number; endLine?: number; breakpoints?: { line: number }[] }
     ) {
-        if (!source || !source.path || !lines || (typeof lines.line !== 'number' && !Array.isArray(lines.lines))) {
+        if (
+            !source ||
+            !source.path ||
+            !location ||
+            (typeof location.line !== 'number' && !Array.isArray(location.breakpoints))
+        ) {
             return;
         }
-        const startLine = lines.line || lines.lines![0];
+
+        const startLine = location.line || location.breakpoints![0].line;
         // Find the cell that matches this line in the IW file by mapping the debugFilePath to the IW file.
         const cell = this.cellToDebugFileSortedInReverseOrderByLineNumber.find(
             (item) => startLine >= item.metadata.interactive.lineIndex + 1
         );
-        if (!cell) {
+        if (!cell || cell.interactiveWindow.path !== source.path) {
             return;
         }
+
         source.path = cell.debugFilePath;
-        if (typeof lines?.endLine === 'number') {
-            lines.endLine = lines.endLine - (cell.lineOffset || 0);
+
+        if (typeof location?.endLine === 'number') {
+            location.endLine = location.endLine - (cell.lineOffset || 0);
         }
-        if (typeof lines?.line === 'number') {
-            lines.line = lines.line - (cell.lineOffset || 0);
+        if (typeof location?.line === 'number') {
+            location.line = location.line - (cell.lineOffset || 0);
         }
-        if (lines?.lines && Array.isArray(lines?.lines)) {
-            lines.lines = lines?.lines.map((line) => line - (cell.lineOffset || 0));
+        if (Array.isArray(location?.breakpoints)) {
+            location.breakpoints.forEach((bp) => (bp.line = bp.line - (cell.lineOffset || 0)));
         }
     }
 
-    protected override async sendRequestToJupyterSession(message: DebugProtocol.ProtocolMessage) {
-        if (this.jupyterSession.disposed || this.jupyterSession.status === 'dead') {
-            traceInfo(`Skipping sending message ${message.type} because session is disposed`);
-            return;
+    protected override async sendRequestToJupyterSession2(
+        request: DebugProtocol.Request
+    ): Promise<DebugProtocol.Response> {
+        if (request.command === 'setBreakpoints') {
+            const args = request.arguments as DebugProtocol.SetBreakpointsArguments;
+            const sourceMapRequest: ISourceMapRequest = { source: { path: args.source.path! }, pydevdSourceMaps: [] };
+            const runtimeSource = this.cellToDebugFileSortedInReverseOrderByLineNumber[0].debugFilePath;
+            sourceMapRequest.pydevdSourceMaps = [
+                // { endLine: 3, line: 1, runtimeLine: 2, runtimeSource: { path: '<ipython-input-1-09853089e9ea>' } }
+                {
+                    endLine: 3,
+                    line: 1,
+                    runtimeLine: 2,
+                    runtimeSource: {
+                        // path: '/var/folders/tx/p0ycbfpj37786p760wwdg6y80000gn/T/ipykernel_4963/3029800661.py'
+                        path: '/private' + runtimeSource
+                    }
+                }
+            ];
+            await this.session.customRequest('setPydevdSourceMap', sourceMapRequest);
+            return super.sendRequestToJupyterSession2(request);
         }
+        if (request.command === '2setBreakpoints') {
+            const args = request.arguments as DebugProtocol.SetBreakpointsArguments;
+            if (this.cellToDebugFileSortedInReverseOrderByLineNumber[0]?.interactiveWindow.path !== args.source.path) {
+                return super.sendRequestToJupyterSession2(request);
+            }
 
-        const request = message as unknown as DebugProtocol.SetBreakpointsRequest;
-        if (request.type === 'request' && request.command === 'setBreakpoints') {
-            const sortedLines = (request.arguments.lines || []).concat(
-                (request.arguments.breakpoints || []).map((bp) => bp.line)
-            );
-            const startLine = sortedLines.length ? sortedLines[0] : undefined;
-            // Find the cell that matches this line in the IW file by mapping the debugFilePath to the IW file.
-            const cell = startLine
-                ? this.cellToDebugFileSortedInReverseOrderByLineNumber.find(
-                      (item) => startLine >= item.metadata.interactive.lineIndex + 1
-                  )
-                : undefined;
-            if (cell) {
-                const clonedRequest: typeof request = JSON.parse(JSON.stringify(request));
-                if (request.arguments.lines) {
-                    request.arguments.lines = request.arguments.lines.filter(
-                        (line) => line <= cell.metadata.generatedCode!.endLine
+            let currentCellLine: number | undefined;
+            let currentCellBps: DebugProtocol.SourceBreakpoint[] = [];
+            const setBreakpointsRequests: Promise<DebugProtocol.SetBreakpointsResponse>[] = [];
+            const sendIfNeeded = () => {
+                if (currentCellBps.length) {
+                    const clonedRequest: DebugProtocol.SetBreakpointsRequest = JSON.parse(JSON.stringify(request));
+                    clonedRequest.arguments.breakpoints = currentCellBps;
+                    setBreakpointsRequests.push(
+                        super.sendRequestToJupyterSession2(
+                            clonedRequest
+                        ) as Promise<DebugProtocol.SetBreakpointsResponse>
                     );
                 }
-                if (request.arguments.breakpoints) {
-                    request.arguments.breakpoints = request.arguments.breakpoints.filter(
-                        (bp) => bp.line <= cell.metadata.generatedCode!.endLine
+            };
+
+            for (const bp of request.arguments.breakpoints ?? []) {
+                const cellForBp = this.cellToDebugFileSortedInReverseOrderByLineNumber.find(
+                    (item) => item.metadata.interactive.lineIndex + 1 <= bp.line
+                );
+                const cellLineForBp = cellForBp?.lineOffset;
+                if (typeof cellLineForBp === 'number' && cellLineForBp !== currentCellLine) {
+                    sendIfNeeded();
+                    currentCellLine = cellLineForBp;
+                    currentCellBps = [bp];
+                } else if (typeof cellLineForBp === 'number') {
+                    currentCellBps.push(bp);
+                } else {
+                    const fakeBreakpoint = { ...bp, ...{ verified: true } };
+                    setBreakpointsRequests.push(
+                        Promise.resolve({
+                            body: { breakpoints: [fakeBreakpoint] }
+                        } as DebugProtocol.SetBreakpointsResponse)
                     );
-                }
-                if (sortedLines.filter((line) => line > cell.metadata.generatedCode!.endLine).length) {
-                    // Find all the lines that don't belong to this cell & add breakpoints for those as well
-                    // However do that separately as they belong to different files.
-                    await this.setBreakpoints({
-                        source: clonedRequest.arguments.source,
-                        breakpoints: clonedRequest.arguments.breakpoints?.filter(
-                            (bp) => bp.line > cell.metadata.generatedCode!.endLine
-                        ),
-                        lines: clonedRequest.arguments.lines?.filter(
-                            (line) => line > cell.metadata.generatedCode!.endLine
-                        )
-                    });
                 }
             }
+            sendIfNeeded();
+
+            const responses = await Promise.all(setBreakpointsRequests);
+            const newResponse: DebugProtocol.SetBreakpointsResponse = JSON.parse(JSON.stringify(responses[0]));
+            responses.slice(1).forEach((response) => {
+                newResponse.body.breakpoints = newResponse.body.breakpoints.concat(response.body.breakpoints ?? []);
+            });
+            return newResponse;
         }
 
-        return super.sendRequestToJupyterSession(message);
+        return super.sendRequestToJupyterSession2(request);
     }
 
     protected getDumpFilesForDeletion() {

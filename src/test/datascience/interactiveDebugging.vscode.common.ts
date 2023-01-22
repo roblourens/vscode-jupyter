@@ -6,10 +6,15 @@
 import { assert } from 'chai';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
-import { traceInfo } from '../../platform/logging';
-import { IDisposable } from '../../platform/common/types';
 import { InteractiveWindowProvider } from '../../interactive-window/interactiveWindowProvider';
-import { initialize, IExtensionTestApi, waitForCondition, startJupyterServer, captureScreenShot } from '../common';
+import { IInteractiveWindowProvider } from '../../interactive-window/types';
+import { pythonIWKernelDebugAdapter } from '../../notebooks/debugger/constants';
+import { Commands } from '../../platform/common/constants';
+import { IDisposable } from '../../platform/common/types';
+import { isWeb, noop } from '../../platform/common/utils/misc';
+import { traceInfo } from '../../platform/logging';
+import { IVariableViewProvider } from '../../webviews/extension-side/variablesView/types';
+import { captureScreenShot, IExtensionTestApi, initialize, startJupyterServer, waitForCondition } from '../common';
 import { IS_REMOTE_NATIVE_TEST } from '../constants';
 import {
     submitFromPythonFile,
@@ -21,11 +26,6 @@ import { closeNotebooksAndCleanUpAfterTests, defaultNotebookTestTimeout, getCell
 import { ITestWebviewHost } from './testInterfaces';
 import { waitForVariablesToMatch } from './variableView/variableViewHelpers';
 import { ITestVariableViewProvider } from './variableView/variableViewTestInterfaces';
-import { IInteractiveWindowProvider } from '../../interactive-window/types';
-import { Commands } from '../../platform/common/constants';
-import { IVariableViewProvider } from '../../webviews/extension-side/variablesView/types';
-import { pythonIWKernelDebugAdapter } from '../../notebooks/debugger/constants';
-import { isWeb, noop } from '../../platform/common/utils/misc';
 import { IControllerDefaultService } from '../../notebooks/controllers/types';
 
 export type DebuggerType = 'VSCodePythonDebugger' | 'JupyterProtocolDebugger';
@@ -36,7 +36,7 @@ export function sharedIWDebuggerTests(
         suiteSetup?: (debuggerType: DebuggerType) => Promise<void>;
     }
 ) {
-    const debuggerTypes: DebuggerType[] = ['VSCodePythonDebugger', 'JupyterProtocolDebugger'];
+    const debuggerTypes: DebuggerType[] = ['JupyterProtocolDebugger'];
     debuggerTypes.forEach((debuggerType) => {
         suite(`Debugging with ${debuggerType} @debugger`, async function () {
             this.timeout(120_000);
@@ -219,6 +219,78 @@ export function sharedIWDebuggerTests(
                     },
                     defaultNotebookTestTimeout,
                     `Did not hit breakpoint during continue`
+                );
+            });
+
+            test.only('Debug a cell with breakpoints in other cells', async () => {
+                // Need a function and a call to the function
+                const source = `
+# %%
+x = 'cell before'
+
+# %%
+print(1)
+print(2)
+print(3)
+
+# %%
+y = 'cell after'
+`;
+                const { activeInteractiveWindow, untitledPythonFile } = await submitFromPythonFileUsingCodeWatcher(
+                    source,
+                    disposables
+                );
+                await waitForLastCellToComplete(activeInteractiveWindow, 3);
+
+                const codeLenses = await waitForCodeLenses(untitledPythonFile.uri, Commands.DebugCell);
+                let stoppedOnLine: number | undefined = undefined;
+                let bpLine = 5;
+                let gotCorrectBreakpointsRequest = false;
+                debugAdapterTracker = {
+                    onDidSendMessage: (message) => {
+                        if (message.command == 'stackTrace' && typeof stoppedOnLine !== 'number') {
+                            console.log('stopped on', message.body.stackFrames[0].line);
+                            stoppedOnLine = message.body.stackFrames[0].line;
+                        }
+
+                        if (message.command == 'setBreakpoints') {
+                            // Breakpoint request should be split by cell
+                            gotCorrectBreakpointsRequest = message.body.breakpoints.length === 1;
+                        }
+                    }
+                };
+
+                const debugCellCodeLenses = codeLenses.filter((c) => c.command?.command === Commands.DebugCell);
+                const debugCellCodeLens = debugCellCodeLenses[1];
+                let args = debugCellCodeLens.command!.arguments || [];
+
+                // Set breakpoint on print(2)
+                vscode.debug.addBreakpoints([
+                    new vscode.SourceBreakpoint(new vscode.Location(untitledPythonFile.uri, new vscode.Position(5, 0)))
+                ]);
+
+                vscode.commands.executeCommand(debugCellCodeLens.command!.command, ...args).then(noop, noop);
+
+                // Stopped on first line
+                await waitForCondition(
+                    async () => {
+                        return stoppedOnLine === bpLine - 1;
+                    },
+                    defaultNotebookTestTimeout,
+                    `Waiting to stop on first line`
+                );
+
+                assert(gotCorrectBreakpointsRequest, 'Did not get correct breakpoints request');
+
+                vscode.commands.executeCommand('workbench.action.debug.continue').then(noop, noop);
+
+                // Stopped on bp line
+                await waitForCondition(
+                    async () => {
+                        return stoppedOnLine === bpLine;
+                    },
+                    defaultNotebookTestTimeout,
+                    `Waiting to stop on bp line`
                 );
             });
 

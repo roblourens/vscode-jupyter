@@ -23,7 +23,7 @@
                 // Enable this to log IPYWIDGET messages
                 "XVSC_JUPYTER_LOG_IPYWIDGETS": "1",
                 // Enable this to log debugger output. Directory must exist ahead of time
-                "XDEBUGPY_LOG_DIR": "${workspaceRoot}/tmp/Debug_Output_Ex"
+                "DEBUGPY_LOG_DIR": "/tmp/debugpy"
             },
             "presentation": {
                 "group": "1_extension",

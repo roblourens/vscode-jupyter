@@ -284,41 +284,21 @@ export abstract class KernelDebugAdapterBase implements DebugAdapter, IKernelDeb
         return undefined;
     }
 
+    // Send request, remap, and fire event
     protected async sendRequestToJupyterSession(message: DebugProtocol.ProtocolMessage) {
         if (this.jupyterSession.disposed || this.jupyterSession.status === 'dead') {
             traceInfo(`Skipping sending message ${message.type} because session is disposed`);
             return;
         }
 
-        // map Source paths from VS Code to Ipykernel temp files
-        getMessageSourceAndHookIt(message, this.translateRealFileToDebuggerFile.bind(this));
-
         this.trace('to kernel', JSON.stringify(message));
         if (message.type === 'request') {
-            const request = message as DebugProtocol.Request;
-            const control = this.jupyterSession.requestDebug(
-                {
-                    seq: request.seq,
-                    type: 'request',
-                    command: request.command,
-                    arguments: request.arguments
-                },
-                true
-            );
-
-            control.onReply = async (msg) => {
-                const message = msg.content as DebugProtocol.Response;
-                getMessageSourceAndHookIt(message, this.translateDebuggerFileToRealFile.bind(this));
-
-                for (const d of this.delegates ?? []) {
-                    await d?.willSendResponse?.(message);
-                }
-
-                this.trace('response', JSON.stringify(message));
-                this.sendMessage.fire(message);
-            };
-            return control.done;
+            const response = await this.sendRequestToJupyterSession2(message);
+            if (response) {
+                this.sendMessage.fire(response);
+            }
         } else if (message.type === 'response') {
+            getMessageSourceAndHookIt(message, this.translateRealLocationToDebuggerLocation.bind(this));
             // responses of reverse requests
             const response = message as DebugProtocol.Response;
             const control = this.jupyterSession.requestDebug(
@@ -335,6 +315,34 @@ export abstract class KernelDebugAdapterBase implements DebugAdapter, IKernelDeb
             traceError(`Unknown message type to send ${message.type}`);
         }
     }
+
+    // Send request, remap
+    protected async sendRequestToJupyterSession2(message: DebugProtocol.ProtocolMessage): Promise<DebugProtocol.Response> {
+        // getMessageSourceAndHookIt(message, this.translateRealLocationToDebuggerLocation.bind(this));
+
+        this.trace('to kernel, mapped', JSON.stringify(message));
+        const request = message as DebugProtocol.Request;
+        const control = this.jupyterSession.requestDebug(
+            {
+                seq: request.seq,
+                type: 'request',
+                command: request.command,
+                arguments: request.arguments
+            },
+            true
+        );
+        const msg = await control.done;
+        const response = msg.content as DebugProtocol.Response;
+        getMessageSourceAndHookIt(response, this.translateDebuggerFileToRealFile.bind(this));
+
+        for (const d of this.delegates ?? []) {
+            await d?.willSendResponse?.(response);
+        }
+
+        this.trace('response', JSON.stringify(response));
+        return response;
+    }
+
     protected translateDebuggerFileToRealFile(
         source: DebugProtocol.Source | undefined,
         _lines?: { line?: number; endLine?: number; lines?: number[] }
@@ -347,7 +355,7 @@ export abstract class KernelDebugAdapterBase implements DebugAdapter, IKernelDeb
             }
         }
     }
-    protected abstract translateRealFileToDebuggerFile(
+    protected abstract translateRealLocationToDebuggerLocation(
         source: DebugProtocol.Source | undefined,
         _lines?: { line?: number; endLine?: number; lines?: number[] }
     ): void;

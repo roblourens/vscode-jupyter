@@ -59,7 +59,7 @@ export function getMessageSourceAndHookIt(
     msg: DebugProtocol.ProtocolMessage,
     sourceHook: (
         source: DebugProtocol.Source | undefined,
-        lines?: { line?: number; endLine?: number; lines?: number[] }
+        lines?: { line?: number; endLine?: number; breakpoints?: number[] }
     ) => void
 ): void {
     switch (msg.type) {
@@ -73,15 +73,12 @@ export function getMessageSourceAndHookIt(
                     );
                     break;
                 case 'loadedSource':
-                    sourceHook(
-                        (event as DebugProtocol.LoadedSourceEvent).body.source,
-                        (event as DebugProtocol.OutputEvent).body
-                    );
+                    sourceHook((event as DebugProtocol.LoadedSourceEvent).body.source);
                     break;
                 case 'breakpoint':
                     sourceHook(
                         (event as DebugProtocol.BreakpointEvent).body.breakpoint.source,
-                        (event as DebugProtocol.OutputEvent).body
+                        (event as DebugProtocol.BreakpointEvent).body.breakpoint
                     );
                     break;
                 default:
@@ -104,6 +101,7 @@ export function getMessageSourceAndHookIt(
                     }
                     break;
                 case 'breakpointLocations':
+                    // TODO this technically would have to be mapped to two different sources, in reality, I don't think that will happen in vscode
                     sourceHook(
                         (request.arguments as DebugProtocol.BreakpointLocationsArguments).source,
                         request.arguments

@@ -14,6 +14,7 @@ import {
     NotebookDocument,
     Uri
 } from 'vscode';
+import { IGeneratedCodeStorageFactory } from '../../interactive-window/editor-integration/types';
 import { IKernelProvider } from '../../kernels/types';
 import { IExtensionSyncActivationService } from '../../platform/activation/types';
 import {
@@ -56,6 +57,7 @@ export class DebuggingManager
     private runByLineDocuments: ContextKey<Uri[]>;
     private debugDocuments: ContextKey<Uri[]>;
     private notebookToRunByLineController = new Map<NotebookDocument, RunByLineController>();
+    private storageFactory: IGeneratedCodeStorageFactory;
 
     public constructor(
         @inject(IKernelProvider) kernelProvider: IKernelProvider,
@@ -69,6 +71,7 @@ export class DebuggingManager
         @inject(IServiceContainer) serviceContainer: IServiceContainer
     ) {
         super(kernelProvider, controllerRegistration, commandManager, appShell, vscNotebook, serviceContainer);
+        this.storageFactory = this.serviceContainer.get<IGeneratedCodeStorageFactory>(IGeneratedCodeStorageFactory);
         this.runByLineCells = new ContextKey(EditorContexts.RunByLineCells, commandManager);
         this.runByLineDocuments = new ContextKey(EditorContexts.RunByLineDocuments, commandManager);
         this.debugDocuments = new ContextKey(EditorContexts.DebugDocuments, commandManager);

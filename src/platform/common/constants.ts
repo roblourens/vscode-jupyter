@@ -54,7 +54,7 @@ export namespace Settings {
     export const IntellisenseTimeout = 2000;
 }
 
-export let isCI = false;
+export let isCI = true;
 export function setCI(enabled: boolean) {
     isCI = enabled;
 }
