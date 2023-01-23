@@ -46,7 +46,10 @@ export class KernelDebugAdapter extends KernelDebugAdapterBase {
     ): Promise<DebugProtocol.Response> {
         if (request.command === 'setBreakpoints') {
             const args = request.arguments as DebugProtocol.SetBreakpointsArguments;
-            const sourceMapRequest: ISourceMapRequest = { source: { path: args.source.path! }, pydevdSourceMaps: [] };
+            const sourceMapRequest: ISourceMapRequest = {
+                source: { path: '<' + args.source.path! },
+                pydevdSourceMaps: []
+            };
             // const runtimeSource = this.cellToDebugFileSortedInReverseOrderByLineNumber[0].debugFilePath;
             const runtimeSource = this.cellToFile.get(args.source.path!);
             sourceMapRequest.pydevdSourceMaps = [
@@ -62,6 +65,7 @@ export class KernelDebugAdapter extends KernelDebugAdapterBase {
                 }
             ];
             await this.session.customRequest('setPydevdSourceMap', sourceMapRequest);
+            args.source.path = '<' + args.source.path;
         }
 
         return super.sendRequestToJupyterSession2(request);
